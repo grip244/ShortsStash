@@ -44,4 +44,4 @@ npm start
 The script will begin fetching and processing videos according to your configuration. On the first run, it will create a cache.json file to speed up future runs.
 
 # License
-# This project is licensed under the MIT License.
+*This project is licensed under the MIT License.
