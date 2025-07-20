@@ -1,5 +1,14 @@
 {
+  "name": "shortstash",
+  "version": "2.1.0",
+  "description": "A script to download YouTube shorts.",
+  "main": "index.js",
   "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "format": "prettier --write .",
+    "build": "node --experimental-sea-config sea-config.json && copy node.exe shortstash.exe && npx postject shortstash.exe NODE_SEA_BLOB prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 --no-signature"
+  },
   "dependencies": {
     "chalk": "^5.4.1",
     "cli-progress": "^3.12.0",
@@ -9,10 +18,8 @@
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
+    "pkg": "^5.8.1",
+    "postject": "^1.0.0-alpha.6",
     "prettier": "^3.6.2"
-  },
-  "scripts": {
-    "format": "prettier --write .",
-    "start": "node main.js"
   }
 }
