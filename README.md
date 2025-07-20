@@ -41,7 +41,7 @@ Usage
 To run the script, simply open your terminal in the project folder and execute:
 
 npm start
-The script will begin fetching and processing videos according to your configuration. On the first run, it will create a cache.json file to speed up future runs.
+The script will begin fetching and processing videos according to your configuration. On the first run, it will create a database file to speed up future runs.
 
 # License
 *This project is licensed under the MIT License.
