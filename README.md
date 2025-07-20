@@ -1,5 +1,5 @@
 # ShortStash 🎞️
-An automated Node.js script to find and download YouTube Shorts from a specific channel, convert them to AMV format, and organize them locally.
+An automated Node.js script to find and download YouTube Shorts from specific channels, convert them to AMV format, and organize them locally.
 
 # Features
 Automated Fetching: Checks a specific YouTube channel for new videos.
