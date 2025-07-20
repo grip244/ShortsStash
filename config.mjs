@@ -4,13 +4,13 @@
 
 // A list of YouTube channel URLs to track.
 export const CHANNELS_TO_CHECK = [
-  'https://www.youtube.com/@Zwagmo',
+  'PLACE_CHANNEL_HEREL(e.g; www.youtube.com/@user, dont include the trailing slash "/videos")',
 ];
 
 // The date to start searching from, in YYYYMMDD format.
 export const DOWNLOAD_AFTER_DATE = '20250701';
 
-// The number of the most recent videos to inspect on each channel.
+// The number of the most recent videos to inspect on each channel. (Higher the value the longer it will take to fetch the videos)
 export const VIDEOS_TO_INSPECT = 5;
 
 // Set to true to run automatically twice a day, or false to run only once.
