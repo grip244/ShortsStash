@@ -17,7 +17,7 @@ Rich Console UI: Provides clear, color-coded status updates, spinners for waitin
 # Prerequisites
 Before you begin, ensure you have the following tools installed and accessible from your system's command line (PATH).
 
-Node.js (v16 or newer)
+Node.js (v23 or newer)
 
 Python (for pip)
 
