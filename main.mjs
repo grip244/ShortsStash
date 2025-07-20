@@ -10,6 +10,7 @@ import inquirer from 'inquirer';
 
 import { dbPromise } from './database.mjs';
 import {
+  BROWSER,
   CHANNELS_TO_CHECK,
   DOWNLOAD_AFTER_DATE,
   VIDEOS_TO_INSPECT,
@@ -179,7 +180,7 @@ async function findNewVideos(channelUrl, afterDate, lastVideoId) {
   let videos;
   try {
     const args = [
-      '--cookies-from-browser', 'opera',
+      '--cookies-from-browser', BROWSER,
       '--playlist-items', `1-${VIDEOS_TO_INSPECT}`,
       '--dump-single-json', channelUrl,
     ];
@@ -280,7 +281,7 @@ function runCommand(command, args) {
 
 async function downloadFormat(url, formatId, outputFilename, onProgress) {
   return new Promise((resolve, reject) => {
-    const args = ['--cookies-from-browser', 'opera', '--progress', '-f', formatId, url, '-o', outputFilename];
+    const args = ['--cookies-from-browser', BROWSER, '--progress', '-f', formatId, url, '-o', outputFilename];
     const process = spawn('yt-dlp', args);
     let error = '';
     process.stdout.on('data', (data) => {
