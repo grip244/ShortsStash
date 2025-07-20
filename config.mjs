@@ -4,14 +4,14 @@
 
 // A list of YouTube channel URLs to track.
 export const CHANNELS_TO_CHECK = [
-  'PASTE_FIRST_CHANNEL_URL_HERE',
+  'https://www.youtube.com/@Zwagmo',
 ];
 
 // The date to start searching from, in YYYYMMDD format.
 export const DOWNLOAD_AFTER_DATE = '20250701';
 
 // The number of the most recent videos to inspect on each channel.
-export const VIDEOS_TO_INSPECT = 20;
+export const VIDEOS_TO_INSPECT = 5;
 
 // Set to true to run automatically twice a day, or false to run only once.
 export const ENABLE_SCHEDULER = false; 
