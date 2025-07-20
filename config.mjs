@@ -14,7 +14,7 @@ export const DOWNLOAD_AFTER_DATE = '20250701';
 export const VIDEOS_TO_INSPECT = 5;
 
 // Set to true to run automatically twice a day, or false to run only once.
-export const ENABLE_SCHEDULER = false; 
+export const ENABLE_SCHEDULER = true; 
 
 // The target output format. Options: 'mp4', 'mp3', 'amv'
 export const TARGET_FORMAT = 'amv';
