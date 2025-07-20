@@ -4,7 +4,7 @@
 
 // A list of YouTube channel URLs to track.
 export const CHANNELS_TO_CHECK = [
-  'https://www.youtube.com/@bartenderfromtiktok/shorts', 'https://www.youtube.com/@theplantslant2431/shorts'
+  'CHANNELS_TO_ADD_HERE'
 ];
 
 // The date to start searching from, in YYYYMMDD format.
