@@ -4,7 +4,8 @@
 
 // A list of YouTube channel URLs to track.
 export const CHANNELS_TO_CHECK = [
-  'PLACE_CHANNES_HERE(e.g; www.youtube.com/@user, dont include the trailing slash "/videos")',
+ // 'PLACE_CHANNES_HERE(e.g; www.youtube.com/@user, dont include the trailing slash "/videos"),
+ 'https://www.youtube.com/@theplantslant2431', 'https://www.youtube.com/@DrewTalbert', 'https://www.youtube.com/@AWorldAccordingToAI'
 ];
 
 // The browser to use for cookie authentication.

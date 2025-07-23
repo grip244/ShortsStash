@@ -7,6 +7,8 @@ import ora from 'ora';
 import chalk from 'chalk';
 import cron from 'node-cron';
 import inquirer from 'inquirer';
+import figlet from 'figlet';
+
 
 import { dbPromise } from './database.mjs';
 import {
@@ -21,13 +23,15 @@ import {
 import { FORMAT_PRESETS } from './formats.mjs';
 
 // --- 1. Argument Validation ---
-const ALLOWED_FLAGS = ['--skip-videos', '--reset-config']; // Add the new flag here
+const ALLOWED_FLAGS = ['--skip-videos', '--reset-config'];
 const providedArgs = process.argv.slice(2);
 
-// Find the first argument that is a flag but is not in our allowed list.
-const invalidFlag = providedArgs.find(arg => 
-    arg.startsWith('-') && !ALLOWED_FLAGS.includes(arg)
+// Filter for flags that are NOT Node.js-specific before validating them
+const appFlags = providedArgs.filter(arg => 
+    arg.startsWith('-') && !arg.startsWith('--no-') && !arg.startsWith('--trace-')
 );
+
+const invalidFlag = appFlags.find(flag => !ALLOWED_FLAGS.includes(flag));
 
 if (invalidFlag) {
   console.error(chalk.red(`Error: Invalid flag provided: ${invalidFlag}`));
@@ -36,7 +40,6 @@ if (invalidFlag) {
 }
 
 const SKIP_NORMAL_VIDEOS = providedArgs.includes('--skip-videos');
-const RESET_CONFIG = providedArgs.includes('--reset-config'); // Check for the new flag
 
 // ===================================================================
 // --- CORE LOGIC ---
@@ -47,30 +50,42 @@ const RESET_CONFIG = providedArgs.includes('--reset-config'); // Check for the n
  */
 async function runAutomation() {
   const db = await dbPromise;
+
   try {
     console.log(chalk.blue('Syncing config file with the database...'));
+
     const configChannels = CHANNELS_TO_CHECK;
     const dbChannels = await db.all('SELECT * FROM channels');
 
+    // 1. Add new channels from config to the DB or reactivate them.
     for (const url of configChannels) {
+      // This will add the channel if it's new, or do nothing if it exists.
       await db.run('INSERT OR IGNORE INTO channels(url) VALUES(?)', url);
-    }
-    const channelsToRemove = dbChannels.filter(
-      (dbChannel) => !configChannels.includes(dbChannel.url)
-    );
-    for (const channel of channelsToRemove) {
-      console.log(chalk.yellow(`Removing stale channel from database: ${channel.url}`));
-      await db.run('DELETE FROM videos WHERE channel_id = ?', channel.id);
-      await db.run('DELETE FROM channels WHERE id = ?', channel.id);
+      // Ensure the channel is marked as active.
+      await db.run('UPDATE channels SET is_active = 1 WHERE url = ?', url);
     }
 
-    const channelsToProcess = await db.all('SELECT * FROM channels');
+    // 2. Deactivate channels that are no longer in the config.
+    const channelsToDeactivate = dbChannels.filter(
+      (dbChannel) => !configChannels.includes(dbChannel.url)
+    );
+
+    for (const channel of channelsToDeactivate) {
+      console.log(chalk.yellow(`Deactivating channel (data retained): ${channel.url}`));
+      await db.run('UPDATE channels SET is_active = 0 WHERE id = ?', channel.id);
+    }
+
+    // 3. Get only the active channels to process.
+    const channelsToProcess = await db.all('SELECT * FROM channels WHERE is_active = 1');
     console.log(chalk.magenta(`Found ${channelsToProcess.length} active channel(s) to check.`));
 
     for (const channel of channelsToProcess) {
-      console.log(chalk.cyan(`\n--- Starting check for channel: ${channel.url} ---`));
+      console.log(
+        chalk.cyan(`\n--- Starting check for channel: ${channel.url} ---`)
+      );
       await processChannel(db, channel);
     }
+
     console.log(chalk.green('\nAutomation run completed for all channels.'));
   } catch (error) {
     console.error(chalk.red('❌ A fatal error occurred:'), error.message);
@@ -98,12 +113,9 @@ async function processChannel(db, channel) {
 
   const uniqueVideos = new Map();
   const combinedResults = [
-    ...videosResult.shorts,
-    ...shortsResult.shorts,
-    ...videosResult.normalVideos,
-    ...shortsResult.normalVideos,
+    ...videosResult.shorts, ...shortsResult.shorts,
+    ...videosResult.normalVideos, ...shortsResult.normalVideos,
   ];
-
   for (const video of combinedResults) {
     if (video) uniqueVideos.set(video.id, video);
   }
@@ -113,10 +125,7 @@ async function processChannel(db, channel) {
     return;
   }
 
-  const sortedVideos = Array.from(uniqueVideos.values()).sort((a, b) =>
-    b.upload_date.localeCompare(a.upload_date)
-  );
-  
+  const sortedVideos = Array.from(uniqueVideos.values()).sort((a, b) => b.upload_date.localeCompare(a.upload_date));
   const lastIdIndex = channel.last_video_id ? sortedVideos.findIndex(v => v.id === channel.last_video_id) : -1;
   const newVideos = lastIdIndex !== -1 ? sortedVideos.slice(0, lastIdIndex) : sortedVideos;
   
@@ -127,22 +136,23 @@ async function processChannel(db, channel) {
 
   const shorts = newVideos.filter(v => v.duration < 181 && v.width < v.height);
   const normalVideos = newVideos.filter(v => !(v.duration < 181 && v.width < v.height));
-  
   let newLatestId = newVideos[0].id;
 
   if (shorts.length > 0) {
     console.log(chalk.cyan(`\nFound ${shorts.length} new short(s). Processing automatically...`));
     for (const video of shorts) {
       await downloadAndProcessVideo(video);
-      await db.run(
-        'INSERT OR IGNORE INTO videos(id, title, channel_id, upload_date) VALUES(?, ?, ?, ?)',
-        video.id, video.title, channel.id, video.upload_date
-      );
+      await db.run('INSERT OR IGNORE INTO videos(id, title, channel_id, upload_date) VALUES(?, ?, ?, ?)', video.id, video.title, channel.id, video.upload_date);
     }
   }
 
-  const normalVideoMode = (await db.get("SELECT value FROM settings WHERE key = 'normal_video_mode'")).value;
-  const skipNormalVideos = normalVideoMode === 'skip';
+  let skipNormalVideos;
+  if (ENABLE_SCHEDULER) {
+    const normalVideoMode = (await db.get("SELECT value FROM settings WHERE key = 'normal_video_mode'")).value;
+    skipNormalVideos = normalVideoMode === 'skip';
+  } else {
+    skipNormalVideos = SKIP_NORMAL_VIDEOS;
+  }
 
   if (normalVideos.length > 0 && !skipNormalVideos) {
     console.log(chalk.yellow(`\nFound ${normalVideos.length} new normal video(s).`));
@@ -161,33 +171,31 @@ async function processChannel(db, channel) {
         {
           type: 'checkbox',
           name: 'videosToDownload',
-          message: 'Select which normal videos you want to download (Space to select, Enter to confirm):',
-          choices: videosToShow.map((v) => ({ name: v.title, value: v })),
+          message: 'Which normal videos would you like to download?',
+          prefix: '✅',
+          choices: videosToShow.map((v) => ({
+            name: ` ${v.title} ${chalk.grey(`(${Math.floor(v.duration / 60)}m ${v.duration % 60}s)`)}`,
+            value: v
+          })),
         },
       ]);
       if (videosToDownload.length > 0) {
         for (const video of videosToDownload) {
           await downloadAndProcessVideo(video);
-          await db.run(
-            'INSERT OR IGNORE INTO videos(id, title, channel_id, upload_date) VALUES(?, ?, ?, ?)',
-            video.id, video.title, channel.id, video.upload_date
-          );
+          await db.run('INSERT OR IGNORE INTO videos(id, title, channel_id, upload_date) VALUES(?, ?, ?, ?)', video.id, video.title, channel.id, video.upload_date);
         }
       }
     }
   } else if (normalVideos.length > 0 && skipNormalVideos) {
-      console.log(chalk.grey(`Skipping ${normalVideos.length} new normal video(s) as per saved setting.`));
+    const reason = ENABLE_SCHEDULER ? 'saved setting' : '--skip-videos flag';
+    console.log(chalk.grey(`Skipping ${normalVideos.length} new normal video(s) as per ${reason}.`));
   }
 
   if (newLatestId) {
-    await db.run(
-      'UPDATE channels SET last_video_id = ? WHERE id = ?',
-      newLatestId, channel.id
-    );
+    await db.run('UPDATE channels SET last_video_id = ? WHERE id = ?', newLatestId, channel.id);
     console.log(chalk.green(`\nCache updated for channel. New latest video ID: ${newLatestId}`));
   }
 }
-
 /*
  * Fetches and separates new videos from a specific channel tab.
  * @returns {Promise<{shorts: object[], normalVideos: object[]}>}
@@ -215,7 +223,9 @@ async function findNewVideos(channelUrl, afterDate, lastVideoId) {
 
   const allFoundVideos = [];
   for (const video of videos) {
-    if (!video || !video.upload_date) continue;
+    if (!video || !video.upload_date || video.upload_date < afterDate) {
+      continue;
+    }
     allFoundVideos.push(video);
   }
 
@@ -324,22 +334,21 @@ async function downloadFormat(url, formatId, outputFilename, onProgress) {
 async function configureNormalVideoMode(db) {
   const setting = await db.get("SELECT value FROM settings WHERE key = 'normal_video_mode'");
   
-  // If the mode is the default "prompt", we need to ask the user for their preference.
   if (setting.value === 'prompt') {
-    console.log(chalk.yellow('One-time setup: How should the scheduler handle normal (non-short) videos?'));
+    console.log(chalk.yellow('🔧 One-time setup required!'));
     const { mode } = await inquirer.prompt([
       {
         type: 'list',
         name: 'mode',
-        message: 'Select the default action for normal videos:',
+        message: 'How should the scheduler handle normal (non-short) videos by default?',
         choices: [
-          { name: 'Always ask which ones to download', value: 'ask' },
-          { name: 'Always skip them automatically', value: 'skip' },
+          { name: chalk.green('Always ask which ones to download'), value: 'ask' },
+          { name: chalk.yellow('Always skip them automatically'), value: 'skip' },
         ],
       },
     ]);
     await db.run("UPDATE settings SET value = ? WHERE key = 'normal_video_mode'", mode);
-    console.log(chalk.green(`Preference saved! Normal videos will now be handled automatically.`));
+    console.log(chalk.green('✅ Preference saved!'));
   }
 }
 
@@ -347,39 +356,90 @@ async function configureNormalVideoMode(db) {
 // --- START SCRIPT ---
 // ===================================================================
 
-async function startApp() {
-    const db = await dbPromise;
-    
-        // --- NEW: Graceful Shutdown Handler ---
-    const cleanup = async () => {
-        console.log(chalk.yellow('\nShutting down gracefully...'));
-        await db.close();
-        console.log(chalk.blue('Database connection closed.'));
-        process.exit(0);
-    };
+/**
+ * Calculates the next scheduled run time based on the hardcoded schedule.
+ * @returns {string} The formatted string for the next run date.
+ */
+function calculateNextRunTime() {
+  const now = new Date();
+  const today8AM = new Date();
+  today8AM.setHours(8, 0, 0, 0); // Set to 8:00:00.000 today
 
-    // Listen for Ctrl+C (SIGINT) and other termination signals
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
-    // --- End of New Section ---
+  const today8PM = new Date();
+  today8PM.setHours(20, 0, 0, 0); // Set to 20:00:00.000 today
 
-    // If the reset flag is passed, reset the setting to its default 'prompt' state.
-    if (RESET_CONFIG) {
-        await db.run("UPDATE settings SET value = 'prompt' WHERE key = 'normal_video_mode'");
-        console.log(chalk.green('Configuration has been reset. You will be prompted to choose a new setting.'));
-    }
-
-    if (ENABLE_SCHEDULER) {
-        await configureNormalVideoMode(db);
-        cron.schedule('0 8,20 * * *', () => {
-            console.log(chalk.bgGreen.black('\n-- Running scheduled check... --'));
-            runAutomation();
-        });
-        console.log(chalk.cyan('✅ Scheduler is active.'));
-    } else {
-        console.log(chalk.yellow('Scheduler is disabled. Running a one-time check...'));
-        runAutomation();
-    }
+  if (now < today8AM) {
+    return today8AM.toLocaleString();
+  } else if (now < today8PM) {
+    return today8PM.toLocaleString();
+  } else {
+    // If it's past 8 PM, the next run is 8 AM tomorrow
+    const tomorrow8AM = new Date();
+    tomorrow8AM.setDate(now.getDate() + 1);
+    tomorrow8AM.setHours(8, 0, 0, 0);
+    return tomorrow8AM.toLocaleString();
+  }
 }
 
-startApp(); // Call the new startup function
+/**
+ * The main entry point for the application.
+ */
+async function startApp() {
+  
+  console.log(
+    chalk.blue(
+      figlet.textSync('ShortStash', {
+        font: 'Standard',
+        horizontalLayout: 'full',
+      })
+    )
+  );
+  console.log(chalk.yellow('            Your Automated Shorts Archiver'));
+  console.log('\n' + '-'.repeat(50) + '\n');
+  
+  const db = await dbPromise;
+  process.stdout.write('\x1b]2;ShortStash\x07');
+  // --- Graceful Shutdown Handler ---
+  const cleanup = async () => {
+    console.log(chalk.yellow('\nShutting down gracefully...'));
+    await db.close();
+    console.log(chalk.blue('Database connection closed.'));
+    process.exit(0);
+  };
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  
+  // --- Argument Validation & Handling ---
+  const providedArgs = process.argv.slice(2);
+  const RESET_CONFIG = providedArgs.includes('--reset-config');
+
+  if (RESET_CONFIG) {
+    await db.run("UPDATE settings SET value = 'prompt' WHERE key = 'normal_video_mode'");
+    console.log(chalk.green('Configuration has been reset. You will be prompted to choose a new setting.'));
+  }
+
+  // --- Main Logic ---
+  if (ENABLE_SCHEDULER) {
+    await configureNormalVideoMode(db);
+    
+    const schedule = '0 8,20 * * *';
+    cron.schedule(schedule, () => {
+      console.log(chalk.bgGreen.black('\n-- Running scheduled check... --'));
+      runAutomation();
+    });
+    
+    const nextRun = calculateNextRunTime();
+    
+    console.log(chalk.cyan('✅ Scheduler is active.'));
+    console.log(chalk.green(`   Next check scheduled for: ${nextRun}`));
+    console.log(chalk.magenta('   Watching Channels:'));
+    CHANNELS_TO_CHECK.forEach(url => console.log(chalk.magenta(`     - ${url}`)));
+    console.log(chalk.magenta(`   Target Format: ${TARGET_FORMAT.toUpperCase()}`));
+
+  } else {
+    console.log(chalk.yellow('Scheduler is disabled. Running a one-time check...'));
+    runAutomation();
+  }
+}
+
+startApp();

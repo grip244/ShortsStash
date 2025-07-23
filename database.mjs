@@ -9,12 +9,12 @@ async function initializeDatabase() {
     driver: sqlite3.Database,
   });
 
-  // Create tables if they don't exist.
-  await db.exec(`
+ await db.exec(`
     CREATE TABLE IF NOT EXISTS channels (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       url TEXT NOT NULL UNIQUE,
-      last_video_id TEXT
+      last_video_id TEXT,
+      is_active INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS videos (
@@ -26,6 +26,16 @@ async function initializeDatabase() {
       FOREIGN KEY (channel_id) REFERENCES channels (id)
     );
   `);
+  
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+
+    -- Set a default value so we don't have to check for nulls
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('normal_video_mode', 'prompt');
+`);
 
   console.log(chalk.green('Database initialized successfully.'));
   return db;
