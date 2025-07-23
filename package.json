@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "format": "prettier --write .",
-    "build": "node --experimental-sea-config sea-config.json && copy node.exe shortstash.exe && npx postject shortstash.exe NODE_SEA_BLOB prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 --no-signature"
+    "build": "node --experimental-sea-config sea-config.json && copy node.exe shortstash.exe && npx postject shortstash.exe NODE_SEA_BLOB prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2"
   },
   "dependencies": {
     "chalk": "^5.4.1",

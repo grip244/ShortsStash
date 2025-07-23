@@ -20,6 +20,24 @@ import {
 } from './config.mjs';
 import { FORMAT_PRESETS } from './formats.mjs';
 
+// --- 1. Argument Validation ---
+const ALLOWED_FLAGS = ['--skip-videos', '--reset-config']; // Add the new flag here
+const providedArgs = process.argv.slice(2);
+
+// Find the first argument that is a flag but is not in our allowed list.
+const invalidFlag = providedArgs.find(arg => 
+    arg.startsWith('-') && !ALLOWED_FLAGS.includes(arg)
+);
+
+if (invalidFlag) {
+  console.error(chalk.red(`Error: Invalid flag provided: ${invalidFlag}`));
+  console.log(chalk.yellow(`Allowed flags are: ${ALLOWED_FLAGS.join(', ')}`));
+  process.exit(1);
+}
+
+const SKIP_NORMAL_VIDEOS = providedArgs.includes('--skip-videos');
+const RESET_CONFIG = providedArgs.includes('--reset-config'); // Check for the new flag
+
 // ===================================================================
 // --- CORE LOGIC ---
 // ===================================================================
@@ -69,7 +87,6 @@ async function runAutomation() {
  * @param {object} channel - The channel object from the database.
  */
 async function processChannel(db, channel) {
-  // --- 1. Fetch from both tabs concurrently ---
   console.log(chalk.blue('Checking both /videos and /shorts tabs...'));
   const videosTabUrl = `${channel.url}/videos`;
   const shortsTabUrl = `${channel.url}/shorts`;
@@ -79,7 +96,6 @@ async function processChannel(db, channel) {
     findNewVideos(shortsTabUrl, DOWNLOAD_AFTER_DATE, channel.last_video_id),
   ]);
 
-  // --- 2. Combine and de-duplicate results ---
   const uniqueVideos = new Map();
   const combinedResults = [
     ...videosResult.shorts,
@@ -97,7 +113,6 @@ async function processChannel(db, channel) {
     return;
   }
 
-  // --- 3. Sort all unique videos by date and categorize ---
   const sortedVideos = Array.from(uniqueVideos.values()).sort((a, b) =>
     b.upload_date.localeCompare(a.upload_date)
   );
@@ -115,7 +130,6 @@ async function processChannel(db, channel) {
   
   let newLatestId = newVideos[0].id;
 
-  // --- 4. Automatically process shorts ---
   if (shorts.length > 0) {
     console.log(chalk.cyan(`\nFound ${shorts.length} new short(s). Processing automatically...`));
     for (const video of shorts) {
@@ -127,8 +141,10 @@ async function processChannel(db, channel) {
     }
   }
 
-  // --- 5. Interactively handle normal videos ---
-  if (normalVideos.length > 0) {
+  const normalVideoMode = (await db.get("SELECT value FROM settings WHERE key = 'normal_video_mode'")).value;
+  const skipNormalVideos = normalVideoMode === 'skip';
+
+  if (normalVideos.length > 0 && !skipNormalVideos) {
     console.log(chalk.yellow(`\nFound ${normalVideos.length} new normal video(s).`));
     const { count } = await inquirer.prompt([
       {
@@ -159,9 +175,10 @@ async function processChannel(db, channel) {
         }
       }
     }
+  } else if (normalVideos.length > 0 && skipNormalVideos) {
+      console.log(chalk.grey(`Skipping ${normalVideos.length} new normal video(s) as per saved setting.`));
   }
 
-  // --- 6. Update cache with the absolute newest video ID ---
   if (newLatestId) {
     await db.run(
       'UPDATE channels SET last_video_id = ? WHERE id = ?',
@@ -171,7 +188,7 @@ async function processChannel(db, channel) {
   }
 }
 
-/**
+/*
  * Fetches and separates new videos from a specific channel tab.
  * @returns {Promise<{shorts: object[], normalVideos: object[]}>}
  */
@@ -182,6 +199,8 @@ async function findNewVideos(channelUrl, afterDate, lastVideoId) {
     const args = [
       '--cookies-from-browser', BROWSER,
       '--playlist-items', `1-${VIDEOS_TO_INSPECT}`,
+      // Add extractor args to ensure consistent data format
+      '--extractor-args', 'youtube:player_client=web',
       '--dump-single-json', channelUrl,
     ];
     const jsonOutput = await runCommand('yt-dlp', args);
@@ -189,17 +208,14 @@ async function findNewVideos(channelUrl, afterDate, lastVideoId) {
     spinner.succeed(chalk.green(`Fetched data for ${videos?.length || 0} videos from ${channelUrl}.`));
   } catch (error) {
     spinner.fail(chalk.red(`Failed to fetch video list from ${channelUrl}.`));
-    // Don't throw error, just return empty so other tab can proceed
     return { shorts: [], normalVideos: [] };
   }
 
   if (!videos || videos.length === 0) return { shorts: [], normalVideos: [] };
 
-  // This check is now handled in the combined list
   const allFoundVideos = [];
   for (const video of videos) {
     if (!video || !video.upload_date) continue;
-    // We don't stop early here, we collect all and filter later
     allFoundVideos.push(video);
   }
 
@@ -209,8 +225,9 @@ async function findNewVideos(channelUrl, afterDate, lastVideoId) {
   return { shorts, normalVideos };
 }
 
+
 /**
- * Downloads, processes, and saves a single video.
+ * Downloads, processes, and saves a single video, ensuring English audio.
  * @param {object} videoInfo - The metadata object for the video.
  */
 async function downloadAndProcessVideo(videoInfo) {
@@ -223,9 +240,11 @@ async function downloadAndProcessVideo(videoInfo) {
     await mkdir(channelDir, { recursive: true });
     const outputPath = join(channelDir, sanitizedTitle);
 
-    const videoFormat = videoInfo.formats.find((f) => f.vcodec !== 'none' && f.acodec === 'none' && f.ext === 'mp4');
-    const audioFormat = videoInfo.formats.find((f) => f.acodec !== 'none' && f.vcodec === 'none' && f.ext === 'm4a');
-    if (!videoFormat || !audioFormat) throw new Error(`Could not find suitable formats for "${videoInfo.title}".`);
+    // --- NEW: Define format selectors to prioritize English ---
+    // Best video (bv) in English (lang=en) + Best audio (ba) in English (lang=en)
+    // Fallback to any language if English is not available.
+    const videoFormatSelector = 'bv*[lang=en] / bv';
+    const audioFormatSelector = 'ba*[lang=en] / ba';
 
     console.log(chalk.blue(`\nProcessing: "${videoInfo.title}"`));
     const multibar = new cliProgress.MultiBar({ format: ' {bar} | {filename} | {value}/{total}%' }, cliProgress.Presets.shades_classic);
@@ -233,8 +252,8 @@ async function downloadAndProcessVideo(videoInfo) {
     const audioBar = multibar.create(100, 0, { filename: 'audio.m4a' });
 
     await Promise.all([
-      downloadFormat(videoInfo.webpage_url, videoFormat.format_id, tempVideoFile, (p) => videoBar.update(p)),
-      downloadFormat(videoInfo.webpage_url, audioFormat.format_id, tempAudioFile, (p) => audioBar.update(p)),
+      downloadFormat(videoInfo.webpage_url, videoFormatSelector, tempVideoFile, (p) => videoBar.update(p)),
+      downloadFormat(videoInfo.webpage_url, audioFormatSelector, tempAudioFile, (p) => audioBar.update(p)),
     ]);
     multibar.stop();
     await processFile(tempVideoFile, tempAudioFile, outputPath);
@@ -298,18 +317,69 @@ async function downloadFormat(url, formatId, outputFilename, onProgress) {
   });
 }
 
+/**
+ * Checks if the user has configured the normal video mode and prompts them if not.
+ * @param {object} db - The database instance.
+ */
+async function configureNormalVideoMode(db) {
+  const setting = await db.get("SELECT value FROM settings WHERE key = 'normal_video_mode'");
+  
+  // If the mode is the default "prompt", we need to ask the user for their preference.
+  if (setting.value === 'prompt') {
+    console.log(chalk.yellow('One-time setup: How should the scheduler handle normal (non-short) videos?'));
+    const { mode } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'mode',
+        message: 'Select the default action for normal videos:',
+        choices: [
+          { name: 'Always ask which ones to download', value: 'ask' },
+          { name: 'Always skip them automatically', value: 'skip' },
+        ],
+      },
+    ]);
+    await db.run("UPDATE settings SET value = ? WHERE key = 'normal_video_mode'", mode);
+    console.log(chalk.green(`Preference saved! Normal videos will now be handled automatically.`));
+  }
+}
+
 // ===================================================================
 // --- START SCRIPT ---
 // ===================================================================
 
-if (ENABLE_SCHEDULER) {
-  cron.schedule('0 8,20 * * *', () => {
-    console.log(chalk.bgGreen.black('\n-- Running scheduled check... --'));
-    runAutomation();
-  });
-  console.log(chalk.cyan('✅ Scheduler is active.'));
-  console.log(chalk.yellow('Checks will run automatically twice a day at 8 AM and 8 PM.'));
-} else {
-  console.log(chalk.yellow('Scheduler is disabled. Running a one-time check...'));
-  runAutomation();
+async function startApp() {
+    const db = await dbPromise;
+    
+        // --- NEW: Graceful Shutdown Handler ---
+    const cleanup = async () => {
+        console.log(chalk.yellow('\nShutting down gracefully...'));
+        await db.close();
+        console.log(chalk.blue('Database connection closed.'));
+        process.exit(0);
+    };
+
+    // Listen for Ctrl+C (SIGINT) and other termination signals
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    // --- End of New Section ---
+
+    // If the reset flag is passed, reset the setting to its default 'prompt' state.
+    if (RESET_CONFIG) {
+        await db.run("UPDATE settings SET value = 'prompt' WHERE key = 'normal_video_mode'");
+        console.log(chalk.green('Configuration has been reset. You will be prompted to choose a new setting.'));
+    }
+
+    if (ENABLE_SCHEDULER) {
+        await configureNormalVideoMode(db);
+        cron.schedule('0 8,20 * * *', () => {
+            console.log(chalk.bgGreen.black('\n-- Running scheduled check... --'));
+            runAutomation();
+        });
+        console.log(chalk.cyan('✅ Scheduler is active.'));
+    } else {
+        console.log(chalk.yellow('Scheduler is disabled. Running a one-time check...'));
+        runAutomation();
+    }
 }
+
+startApp(); // Call the new startup function
